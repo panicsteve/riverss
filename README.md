@@ -12,7 +12,7 @@ Sorry, getting this running is not very user friendly at this time.
 3. Edit application/config/database.php and set correct database host, username, password, etc, for your database server.
 4. Create a folder called cache at the root of the project (next to index.php) and make it writable by the web server.
 5. Manually add some feed titles/URLs to the table called feeds. (sorry, no GUI for this)
-6. Init feeds by hitting <yourserver>/riverss/index.php/feeds/update
+6. Init feeds by hitting [yourserver]/riverss/index.php/feeds/update
 7. Set up a cron job or something to hit that URL periodically to update feeds.
 
 ## Acknowledgements
