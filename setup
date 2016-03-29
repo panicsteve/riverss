@@ -1,0 +1,225 @@
+#!/usr/bin/env ruby
+
+require 'fileutils'
+require 'open3'
+require 'optparse'
+require 'optparse/URI'
+require 'ostruct'
+
+class InstallOptionsParser
+  Version = '1.0.0'
+
+  def self.defaults
+    defaults = OpenStruct.new
+    defaults.base_url = 'http://localhost'
+    defaults.time_zone = 'America/Los_Angeles'
+    defaults.mysql_host = "localhost"
+    defaults.mysql_database = 'riverss'
+    defaults.mysql_username = 'riverss'
+    defaults.mysql_password = 'riverss'
+
+    defaults
+  end
+
+  def self.parse(args)
+    options = OpenStruct.new
+
+    opt_parser = OptionParser.new do |parser|
+      parser.banner = "Usage: ./install [options]"
+      parser.separator ""
+      parser.separator "Specific options:"
+
+      parser.on("-b", "--base_url [URL]", "Base URL") do |base|
+        options.base_url = base
+      end
+
+      parser.on("-t", "--timezone [TIMEZONE]", "Local timezone") do |timezone|
+        options.time_zone = timezone
+      end
+
+      parser.on("-h", "--mysql-host [HOST]", "MySQL host name") do |host|
+        options.mysql_host = host
+      end
+
+      parser.on("-d", "--mysql-database [DATABASE]", "MySQL database") do |database|
+        options.mysql_database = database
+      end
+
+      parser.on("-u", "--mysql-username [USER]", "MySQL username") do |username|
+        options.mysql_username = username
+      end
+
+      parser.on("-p", "--mysql-password [PASSWORD]", "MySQL password") do |password|
+        options.mysql_password = password
+      end
+
+      parser.separator ""
+      parser.separator "Common options:"
+      parser.on_tail("-h", "--help", "Show this message") do
+        puts parser
+        exit
+      end
+
+      parser.on_tail("--version", "Show version") do
+        puts Version
+        exit
+      end
+    end
+
+    opt_parser.parse!(args)
+    options
+  end
+end
+
+class DefaultsQuestionnaire
+  def self.settings(defaults, options)
+
+    options.base_url = DefaultsQuestionnaire.parse(options.base_url, defaults.base_url, "What do you want the base URL to be? Defaults to \"#{defaults.base_url}\".")
+    options.time_zone = DefaultsQuestionnaire.parse(options.time_zone, defaults.time_zone, "What is your time zone? Defaults to \"#{defaults.time_zone}\".")
+    options.mysql_host = DefaultsQuestionnaire.parse(options.mysql_host, defaults.mysql_host, "What is your MySQL host? Defaults to \"#{defaults.mysql_host}\".")
+    options.mysql_database = DefaultsQuestionnaire.parse(options.mysql_database, defaults.mysql_database, "Which database do you want to use? Defaults to \"#{defaults.mysql_database}\".")
+    options.mysql_username = DefaultsQuestionnaire.parse(options.mysql_username, defaults.mysql_username, "What is MySQL your username? Defaults to \"#{defaults.mysql_username}\".")
+    options.mysql_password = DefaultsQuestionnaire.parse(options.mysql_password, defaults.mysql_password, "What is MySQL your password? Defaults to \"#{defaults.mysql_password}\".")
+
+    options
+  end
+
+  def self.parse(val, default, question)
+    answer = val
+    if val.nil? or val.empty? then
+      puts question
+      answer = gets
+      answer = answer.chomp
+
+      if answer.empty? then
+        answer = default
+      end
+    end
+
+    answer
+  end
+end
+
+class SetupAssistant
+  attr_reader :settings
+  attr_accessor :quiet
+
+  def initialize(settings)
+    @settings = settings
+    @quiet = false
+  end
+
+  def run
+    @status = 0
+    create_database unless @status > 0
+    configure_database unless @status > 0
+    configure_app unless @status > 0
+    create_cache unless @status > 0
+  end
+
+  def success?
+    return @status == 0
+  end
+
+  def create_database
+    puts "Creating database" unless @quiet
+
+    db_cmd = "mysql -u#{@settings.mysql_username} -p#{@settings.mysql_password} -e \"CREATE DATABASE IF NOT EXISTS #{@settings.mysql_database}\""
+    run_cmd db_cmd
+
+    import_cmd = "mysql #{@settings.mysql_database} -u#{@settings.mysql_username} -p#{@settings.mysql_password} < ./schema.sql"
+    run_cmd import_cmd
+
+    if @status == 0 then
+      puts "Database created" unless @quiet
+    end
+  end
+
+  def create_cache
+    puts "Creating cache"  unless @quiet
+
+    FileUtils.mkdir 'cache', :mode => 0666 unless File.exists?('./cache')
+
+    if @status == 0 then
+      puts "Cache created"  unless @quiet
+    end
+  end
+
+  def configure_app
+    puts "Configuring web app" unless @quiet
+
+    file_name = 'application/config/config.php'
+    text = File.read(file_name)
+
+    contents = text.gsub(/date_default_timezone_set\('(.*?)'\)/, "date_default_timezone_set('#{@settings.time_zone}')")
+    contents = contents.gsub(/\$config\['base_url'\] = '(.*?)'/, "$config['base_url'] = '#{@settings.base_url}'")
+
+    File.open(file_name, 'w') do |file|
+      file.puts contents
+    end
+
+    if @status == 0 then
+      puts "Web app configured" unless @quiet
+    end
+  end
+
+  def configure_database
+    puts "Configuring database" unless @quiet
+
+    file_name = 'application/config/database.php'
+    text = File.read(file_name)
+
+    contents = text.gsub(/'hostname' => '(.*?)'/, "'hostname' => '#{@settings.mysql_host}'")
+    contents = contents.gsub(/'username' => '(.*?)'/, "'username' => '#{@settings.mysql_username}'")
+    contents = contents.gsub(/'password' => '(.*?)'/, "'password' => '#{@settings.mysql_password}'")
+    contents = contents.gsub(/'database' => '(.*?)'/, "'database' => '#{@settings.mysql_database}'")
+
+    File.open(file_name, 'w') do |file|
+      file.puts contents
+    end
+
+    if @status == 0 then
+      puts "Database configured" unless @quiet
+    end
+  end
+
+  def run_cmd(cmd)
+    return unless @status == 0
+
+    Open3.popen3(cmd) do |stdin, stdout, stderr, wait_thr|
+      @status = wait_thr.value.exitstatus
+      while line = stderr.gets
+        puts line
+      end
+    end
+  end
+end
+
+defaults = InstallOptionsParser.defaults
+options = InstallOptionsParser.parse(ARGV)
+settings = DefaultsQuestionnaire.settings(defaults, options)
+
+puts "Riverss is configured with the following settings:"
+puts "  Base URL: #{settings.base_url}"
+puts "  Time zone: #{settings.time_zone}"
+puts "  MySQL host: #{settings.mysql_host}"
+puts "  MySQL database: #{settings.mysql_database}"
+puts "  MySQL username: #{settings.mysql_password}"
+puts "  MySQL password: ********"
+puts "Are the these settings okay? (y/N)"
+
+valid = gets
+valid = valid.chomp.downcase
+if valid == "y" or valid == "yes" then
+  setup = SetupAssistant.new settings
+  setup.run
+
+  if setup.success? then
+    puts "===================================================="
+    puts "             🎉  🎉  All done!  🎉  🎉             "
+    puts "===================================================="
+  end
+else
+  puts "Setup canceled."
+  exit
+end
